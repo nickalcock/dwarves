@@ -16,6 +16,7 @@
 #include <elfutils/libdwfl.h>
 #include <linux/types.h>
 #include <sys/types.h>
+#include <ctf-api.h>
 
 #include "dutil.h"
 #include "list.h"
@@ -314,6 +315,7 @@ struct cu {
 	size_t		 function_bytes_removed;
 	int		 build_id_len;
 	unsigned char	 build_id[0];
+	ctf_dict_t	 *ctf_fp;
 };
 
 struct cu *cu__new(const char *name, uint8_t addr_size,
@@ -665,7 +667,8 @@ static inline int tag__is_tag_type(const struct tag *tag)
 	       tag->tag == DW_TAG_volatile_type ||
 	       tag->tag == DW_TAG_atomic_type ||
 	       tag->tag == DW_TAG_unspecified_type ||
-	       tag->tag == DW_TAG_LLVM_annotation;
+	       tag->tag == DW_TAG_LLVM_annotation ||
+	       tag->tag == DW_TAG_GNU_annotation;
 }
 
 static inline const char *tag__decl_file(const struct tag *tag,

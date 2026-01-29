@@ -2207,11 +2207,12 @@ out:
 /*
  * This should really do demand loading of DSOs, STABS anyone? 8-)
  */
-extern struct debug_fmt_ops dwarf__ops, btf__ops;
+extern struct debug_fmt_ops dwarf__ops, btf__ops, libctf__ops;
 
 static struct debug_fmt_ops *debug_fmt_table[] = {
 	&dwarf__ops,
 	&btf__ops,
+	&libctf__ops,
 	NULL,
 };
 
@@ -2912,10 +2913,16 @@ static int cus__load_running_kernel(struct cus *cus, struct conf_load *conf)
 	if (!conf || conf->format_path == NULL)
 		goto try_btf;
 
+	if (strstr(conf->format_path, "libctf")) {
+		fprintf(stderr, "Format path is libctf\n");
+		goto try_libctf;
+	}
+
 	if (!strstr(conf->format_path, "btf"))
 		goto try_elf;
 
 	btf_only = strcmp(conf->format_path, "btf") == 0;
+
 try_btf:
 	if (access(vmlinux_path__btf_filename(), R_OK) == 0) {
 		int loader = debugging_formats__loader("btf");
@@ -2925,6 +2932,14 @@ try_btf:
 		if (conf && conf->conf_fprintf)
 			conf->conf_fprintf->has_alignment_info = debug_fmt_table[loader]->has_alignment_info;
 
+		if (debug_fmt_table[loader]->load_file(cus, conf, vmlinux_path__btf_filename()) == 0)
+			return 0;
+	}
+try_libctf:
+	if (access(vmlinux_path__btf_filename(), R_OK) == 0) {
+		int loader = debugging_formats__loader("libctf");
+		if (loader == -1)
+			goto try_btf;
 		if (debug_fmt_table[loader]->load_file(cus, conf, vmlinux_path__btf_filename()) == 0)
 			return 0;
 	}
