@@ -50,7 +50,10 @@ static void *tag__alloc(const size_t size)
 static int cu__load_ftype(struct cu *cu, struct ftype *proto, uint32_t tag, const struct btf_type *tp, uint32_t id)
 {
 	const struct btf_param *param = btf_params(tp);
-	int i, vlen = btf_vlen(tp);
+	int i;
+	size_t nargs_type, nargs_name;
+	ctf_id_t ret_type;
+	ctf_func_type_flags_t flags;
 
 	proto->tag.tag	= tag;
 	proto->tag.type = tp->type;
@@ -60,8 +63,10 @@ static int cu__load_ftype(struct cu *cu, struct ftype *proto, uint32_t tag, cons
 	proto->template_parameter_pack = NULL;
 	proto->formal_parameter_pack = NULL;
 
-	for (i = 0; i < vlen; ++i, param++) {
-		if (param->type == 0)
+	ctf_id_t *func_arg_types = ctf_func_type(cu->ctf_fp, id, &ret_type, &flags, &nargs_type);
+	const char **func_arg_names = ctf_func_arg_names(cu->ctf_fp, id, &nargs_name);
+	for (i = 0; i < nargs_type; ++i, param++) {
+		if (func_arg_types[i] == 0)
 			proto->unspec_parms = 1;
 		else {
 			struct parameter *p = tag__alloc(sizeof(*p));
@@ -69,8 +74,8 @@ static int cu__load_ftype(struct cu *cu, struct ftype *proto, uint32_t tag, cons
 			if (p == NULL)
 				goto out_free_parameters;
 			p->tag.tag  = DW_TAG_formal_parameter;
-			p->tag.type = param->type;
-			p->name	    = ctf_type_aname(cu->ctf_fp, id);
+			p->tag.type = func_arg_types[i];
+			p->name	    = func_arg_names[i];
 			ftype__add_parameter(proto, p);
 		}
 	}
@@ -229,7 +234,7 @@ static int create_members(struct cu *cu, const struct btf_type *tp, struct type 
 	const char *name;
 	ctf_id_t membtype;
 
-	while ((offset = ctf_member_next(cu->ctf_fp, id, &i, &name, &membtype, &bit_width, 0)) != CTF_ERR) {
+	while ((offset = ctf_member_next(cu->ctf_fp, id, &i, &name, &membtype, &bit_width, 1)) != CTF_ERR) {
 		struct class_member *member = zalloc(sizeof(*member));
 
 		if (member == NULL)
@@ -239,9 +244,11 @@ static int create_members(struct cu *cu, const struct btf_type *tp, struct type 
 		member->tag.type   = membtype;
 		member->name	   = name;
 		member->bit_offset = offset;
+		member->byte_offset = offset / 8;
 		member->bitfield_size = bit_width;
-		member->byte_offset = member->bit_offset / 8;
-		/* sizes and offsets will be corrected at class__fixup_btf_bitfields */
+		/* sizes added here instead of in class__fixup_btf_bitfields.  */
+		member->byte_size = ctf_type_size(cu->ctf_fp, membtype);
+		member->bit_size = member->bit_size / 8;
 		type__add_member(class, member);
 	}
 
@@ -250,7 +257,9 @@ static int create_members(struct cu *cu, const struct btf_type *tp, struct type 
 
 static int create_new_class(struct cu *cu, const struct btf_type *tp, uint32_t id)
 {
-	struct class *class = class__new(ctf_type_aname(cu->ctf_fp, id), tp->size, false);
+	// Fixup name, as libctf will return "struct <name>".
+	struct class *class = class__new(ctf_type_aname(cu->ctf_fp, id) + 7, 
+					tp->size, false);
 	int member_size = create_members(cu, tp, &class->type, id);
 
 	if (member_size < 0)
@@ -295,25 +304,26 @@ static struct enumerator *enumerator__new(const char *name, uint64_t value)
 
 static int create_new_enumeration(struct cu *cu, const struct btf_type *tp, uint32_t id)
 {
-	struct btf_enum *ep = btf_enum(tp);
-	uint16_t i, vlen = btf_vlen(tp);
+	const char *enum_name;
+	ctf_next_t *it = NULL;
+	ctf_enum_value_t enum_value;
 	struct type *enumeration = type__new(DW_TAG_enumeration_type,
 					     ctf_type_aname(cu->ctf_fp, id),
 					     tp->size ? tp->size * 8 : (sizeof(int) * 8));
 
 	if (enumeration == NULL)
 		return -ENOMEM;
-
+	
+	// perhaps check the ctf_encoding_t->cte_format here instead
 	enumeration->is_signed_enum = !!btf_kflag(tp);
 
-	for (i = 0; i < vlen; i++) {
-		const char *name = ctf_enum_name(cu->ctf_fp, id, i);
-		uint64_t value = ep[i].val;
+	while ((enum_name = ctf_enum_next(cu->ctf_fp, id, &it, &enum_value)) != NULL) {
+		uint64_t value = enum_value.val.uval;
 
 		if (!enumeration->is_signed_enum)
-			value = (uint32_t)ep[i].val;
+			value = (uint32_t)enum_value.val.uval;
 
-		struct enumerator *enumerator = enumerator__new(name, value);
+		struct enumerator *enumerator = enumerator__new(enum_name, value);
 
 		if (enumerator == NULL)
 			goto out_free;
@@ -345,21 +355,23 @@ static struct enumerator *enumerator__new64(const char *name, uint64_t value)
 
 static int create_new_enumeration64(struct cu *cu, const struct btf_type *tp, uint32_t id)
 {
-	struct btf_enum64 *ep = btf_enum64(tp);
-	uint16_t i, vlen = btf_vlen(tp);
+	const char *enum_name;
+	ctf_next_t *it = NULL;
+	ctf_enum_value_t enum_value;
 	struct type *enumeration = type__new(DW_TAG_enumeration_type,
 					     ctf_type_aname(cu->ctf_fp, id),
 					     tp->size ? tp->size * 8 : (sizeof(int) * 8));
 
 	if (enumeration == NULL)
 		return -ENOMEM;
-
+	
+	// perhaps check the ctf_encoding_t->cte_format here instead
 	enumeration->is_signed_enum = !!btf_kflag(tp);
 
-	for (i = 0; i < vlen; i++) {
-		const char *name = ctf_enum_name(cu->ctf_fp, id, i);
-		uint64_t value = btf_enum64_value(&ep[i]);
-		struct enumerator *enumerator = enumerator__new64(name, value);
+	while ((enum_name = ctf_enum_next(cu->ctf_fp, id, &it, &enum_value)) != NULL) {
+		uint64_t value = enum_value.val.uval;
+
+		struct enumerator *enumerator = enumerator__new64(enum_name, value);
 
 		if (enumerator == NULL)
 			goto out_free;
@@ -595,129 +607,6 @@ static int libctf__load_types(struct cu *cu, ctf_dict_t *fp)
 	return 0;
 }
 
-static uint32_t class__infer_alignment(const struct conf_load *conf,
-				       uint32_t byte_offset,
-				       uint32_t natural_alignment,
-				       uint32_t smallest_offset)
-{
-	uint16_t cacheline_size = conf->conf_fprintf->cacheline_size;
-	uint32_t alignment = 0;
-	uint32_t offset_delta = byte_offset - smallest_offset;
-
-	if (offset_delta) {
-		if (byte_offset % 2 == 0) {
-			/* Find the power of 2 immediately higher than
-			 * offset_delta
-			 */
-			alignment = 1 << (8 * sizeof(offset_delta) -
-					      __builtin_clz(offset_delta));
-		} else {
-			alignment = 0;
-		}
-	}
-
-	/* Natural alignment, nothing to do */
-	if (alignment <= natural_alignment || alignment == 1)
-		alignment = 0;
-	/* If the offset is compatible with being aligned on the cacheline size
-	 * and this would only result in increasing the alignment, use the
-	 * cacheline size as it is safe and quite likely to be what was in the
-	 * source.
-	 */
-	else if (alignment < cacheline_size &&
-		 cacheline_size % alignment == 0 &&
-		 byte_offset % cacheline_size == 0)
-		alignment = cacheline_size;
-
-	return alignment;
-}
-
-static int class__fixup_btf_bitfields(const struct conf_load *conf, struct tag *tag, struct cu *cu)
-{
-	struct class_member *pos;
-	struct type *tag_type = tag__type(tag);
-	uint32_t smallest_offset = 0;
-
-	type__for_each_data_member(tag_type, pos) {
-		struct tag *type = tag__strip_typedefs_and_modifiers(&pos->tag, cu);
-
-		if (type == NULL) /* FIXME: C++ BTF... */
-			continue;
-
-		pos->bitfield_offset = 0;
-		pos->byte_size = tag__size(type, cu);
-		pos->bit_size = pos->byte_size * 8;
-
-		/* If the BTF data is incorrect and has size == 0, skip field
-		 * instead of crashing. However the field can be a zero or
-		 * variable-length array and we still need to infer alignment.
-		 */
-		if (pos->byte_size == 0) {
-			pos->alignment = class__infer_alignment(conf,
-								pos->byte_offset,
-								tag__natural_alignment(type, cu),
-								smallest_offset);
-			continue;
-		}
-
-		/* bitfield fixup is needed for enums and base types only */
-		if (type->tag == DW_TAG_base_type || type->tag == DW_TAG_enumeration_type) {
-			if (pos->bitfield_size) {
-				/* bitfields seem to be always aligned, no matter the packing */
-				pos->byte_offset = pos->bit_offset / pos->bit_size * pos->bit_size / 8;
-				pos->bitfield_offset = pos->bit_offset - pos->byte_offset * 8;
-				/* re-adjust bitfield offset if it is negative */
-				if (pos->bitfield_offset < 0) {
-					pos->bitfield_offset += pos->bit_size;
-					pos->byte_offset -= pos->byte_size;
-					pos->bit_offset = pos->byte_offset * 8 + pos->bitfield_offset;
-				}
-			} else {
-				pos->byte_offset = pos->bit_offset / 8;
-			}
-		}
-
-		pos->alignment = class__infer_alignment(conf,
-							pos->byte_offset,
-							tag__natural_alignment(type, cu),
-							smallest_offset);
-
-		/* Compute the smallest offset between this field and the next
-		 * one.
-		 *
-		 * In case of bitfields we need to take into account the
-		 * actual size being used instead of the underlying type one as
-		 * it could be larger, otherwise we could miss a hole.
-		 */
-		smallest_offset = pos->byte_offset;
-		smallest_offset += pos->bitfield_size ?
-			(pos->bitfield_offset + pos->bitfield_size + 7) / 8 :
-			pos->byte_size;
-	}
-
-	tag_type->alignment = class__infer_alignment(conf,
-						     tag_type->size,
-						     tag__natural_alignment(tag, cu),
-						     smallest_offset);
-
-	return 0;
-}
-
-static int cu__fixup_btf_bitfields(const struct conf_load *conf, struct cu *cu)
-{
-	int err = 0;
-	struct tag *pos;
-
-	list_for_each_entry(pos, &cu->tags, node)
-		if (tag__is_struct(pos) || tag__is_union(pos)) {
-			err = class__fixup_btf_bitfields(conf, pos, cu);
-			if (err)
-				break;
-		}
-
-	return err;
-}
-
 static void libctf__cu_delete(struct cu *cu)
 {
 	btf__free(cu->priv);
@@ -735,7 +624,7 @@ static int cus__load_btf_libctf(struct cus *cus, struct conf_load *conf, const c
 {
 	ctf_dict_t *fp;
 	ctf_archive_t *ctf;
-	int err = -1;
+	ctf_error_t err = -1;
 
 	// Pass a zero for addr_size, we'll get it after we load via btf__pointer_size()
 	struct cu *cu = cu__new(filename, 0, NULL, 0, filename, false);
@@ -762,7 +651,6 @@ static int cus__load_btf_libctf(struct cus *cus, struct conf_load *conf, const c
 	if (err != 0)
 		goto out_free;
 
-	err = cu__fixup_btf_bitfields(conf, cu);
 	/*
 	 * The app stole this cu, possibly deleting it,
 	 * so forget about it
