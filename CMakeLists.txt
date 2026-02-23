@@ -53,6 +53,7 @@ find_package(DWARF REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(argp REQUIRED)
 find_package(obstack REQUIRED)
+find_package(libctf REQUIRED)
 find_package(Python3 QUIET)
 
 # make sure git submodule(s) are checked out
