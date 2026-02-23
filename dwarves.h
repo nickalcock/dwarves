@@ -514,6 +514,11 @@ int cu__for_all_tags(struct cu *cu,
 				     struct cu *cu, void *cookie),
 		     void *cookie);
 
+/* Must be above the inlines. */
+#ifndef DW_TAG_GNU_annotation
+#define DW_TAG_GNU_annotation 0x6001
+#endif
+
 struct attributes {
 	uint64_t cnt;
 	const char *values[];
