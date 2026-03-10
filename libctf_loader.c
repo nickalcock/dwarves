@@ -15,6 +15,7 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <assert.h> // Paranoia check: remove
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -620,11 +621,30 @@ static int libbpf_log(enum libbpf_print_level level __maybe_unused, const char *
 
 struct debug_fmt_ops libctf__ops;
 
+static void libctf__errwarn(ctf_dict_t *fp)
+{
+	ctf_next_t *it = NULL;
+	char *errtext;
+	ctf_error_t err;
+
+	/* Dump accumulated errors and warnings.  */
+	while ((errtext = ctf_errwarning_next(fp, &it, NULL, &err)) != NULL) {
+		fprintf(stderr, "libctf: %s", errtext);
+		free(errtext);
+	}
+	if (err != ECTF_NEXT_END)
+		fprintf(stderr, "libctf error: cannot get CTF errors: %s",
+			ctf_errmsg(err));
+}
+
 static int cus__load_btf_libctf(struct cus *cus, struct conf_load *conf, const char *filename)
 {
-	ctf_dict_t *fp;
-	ctf_archive_t *ctf;
+	ctf_dict_t *link = NULL, *fp, *against_dict = NULL;
+	ctf_archive_t *ctf, *against = NULL, *linked;
 	ctf_error_t err = -1;
+	unsigned char *out;
+	ctf_sect_t s = {0};
+	int is_btf;
 
 	// Pass a zero for addr_size, we'll get it after we load via btf__pointer_size()
 	struct cu *cu = cu__new(filename, 0, NULL, 0, filename, false);
@@ -638,14 +658,90 @@ static int cus__load_btf_libctf(struct cus *cus, struct conf_load *conf, const c
 
 	libbpf_set_print(libbpf_log);
 
-	// libctf opening procedure (parent)
-	if ((ctf = ctf_open (filename, NULL, &err)) == NULL)
+	// libctf opening procedure
+	if ((ctf = ctf_open(filename, NULL, &err)) == NULL)
 		goto open_err;
-	if ((fp = ctf_dict_open (ctf, NULL, &err)) == NULL)
+
+	// Kludgy as hell dedup-against-parent code.  Should use an arg, not
+	// an env var.
+
+	// Set the default output format to BTF: make sure libctf
+	// supports the same version of BTF as pahole.
+
+	if (ctf_version(0, sizeof(struct btf_header), LIBCTF_BTM_BTF) < 0)
+		goto ctf_err;
+
+	if ((link = ctf_create(NULL, &err)) == NULL)
+		goto create_err;
+
+	// BTF is less strict about duplicate enums than CTF.
+	if (ctf_dict_set_flag(link, CTF_STRICT_NO_DUP_ENUMERATORS, 0) < 0)
+		goto link_err;
+
+	if (getenv("PAHOLE_AGAINST") != NULL) {
+
+		if ((against = ctf_open(getenv("PAHOLE_AGAINST"), NULL, &err)) == NULL) {
+			filename = getenv("PAHOLE_AGAINST");
+			goto open_err;
+		}
+
+		// Deduplicate.
+		if ((ctf_link_against(link, against, ctf, filename,
+				      CTF_LINK_SHARE_DUPLICATED)) < 0)
+			goto link_err;
+	} else {
+		// Deduplicate.
+		if (ctf_link_add(link, ctf, filename, NULL) < 0)
+			goto link_err;
+
+		if ((ctf_link(link, CTF_LINK_SHARE_UNCONFLICTED)) < 0)
+			goto link_err;
+	}
+
+	/*
+	 * Serialize the deduplicated dict to lower it to BTF, close
+	 * everything, then open it again.
+	 */
+
+	if ((out = ctf_link_write(link, &s.cts_size, (size_t) -1,
+				  &is_btf)) == NULL)
+		goto link_err;
+
+	/* Temporary paranoia check, XXX remove.  */
+	assert (is_btf);
+
+	ctf_dict_close(link);
+	ctf_arc_close(against);
+	ctf_arc_close(ctf);
+
+	s.cts_data = (void *) out;
+
+	if (getenv("PAHOLE_AGAINST") != NULL) {
+		if ((against_dict = ctf_dict_open(against, NULL,
+						  &err)) == NULL)
+			goto open_err;
+	}
+
+	if ((linked = ctf_arc_bufopen(&s, NULL, NULL,
+				      &err)) == NULL)
 		goto open_err;
+
+	if (ctf_arc_set_parent(linked, against_dict) < 0)
+		goto open_err;
+
+	/*
+	 * For now, just look at the first dict in the archive: unambiguous,
+	 * unconflicting types.
+	 */
+	if ((fp = ctf_dict_open(linked, NULL, &err)) == NULL)
+		goto open_err;
+
+	ctf_dict_close(against_dict);
 
 	// hold the dict for the cu
 	cu->ctf_fp = fp;
+
+	libctf__errwarn(fp);
 
 	err = libctf__load_types(cu, fp);
 	if (err != 0)
@@ -665,8 +761,25 @@ static int cus__load_btf_libctf(struct cus *cus, struct conf_load *conf, const c
 out_free:
 	cu__delete(cu); // will call btf__free(cu->priv);
 	return err;
+ctf_err:
+	fprintf(stderr, "%s: ctf error: %s\n", filename, ctf_errmsg(err));
+	libctf__errwarn(NULL);
+	return -1;
+link_err:
+	fprintf(stderr, "%s: ctf error deduplicating: %s\n", filename, ctf_errmsg(ctf_errno(link)));
+	libctf__errwarn(link);
+	ctf_dict_close(link);
+	ctf_arc_close(against);
+	ctf_arc_close(ctf);
+	return -1;
+create_err:
+	fprintf(stderr, "%s: cannot create dict for linking purposes: %s\n",
+		filename, ctf_errmsg(err));
+	libctf__errwarn(NULL);
+	return -1;
 open_err:
-	fprintf (stderr, "%s: cannot open: %s\n", filename, ctf_errmsg (err));
+	fprintf(stderr, "%s: cannot open: %s\n", filename, ctf_errmsg(err));
+	libctf__errwarn(NULL);
 	return -1;
 }
 
