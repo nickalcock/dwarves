@@ -39,6 +39,7 @@ static bool sort_output;
 static bool need_resort;
 static bool first_obj_only;
 static bool show_running_kernel_vmlinux;
+static bool use_libctf;
 static const char *base_btf_file;
 
 static const char *prettify_input_filename;
@@ -2021,7 +2022,7 @@ static error_t pahole__options_parser(int key, char *arg,
 	case ARGP_btf_attributes:
 		conf_load.btf_attributes = true;	break;
 	case ARGP_use_libctf:
-		using_libctf = true;		break;
+		use_libctf = true;					break;
 	default:
 		return ARGP_ERR_UNKNOWN;
 	}
@@ -3595,7 +3596,7 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if (base_btf_file && !using_libctf) {
+	if (base_btf_file && !use_libctf) {
 		conf_load.base_btf = btf__parse(base_btf_file, NULL);
 		if (libbpf_get_error(conf_load.base_btf)) {
 			fprintf(stderr, "Failed to parse base BTF '%s': %ld\n",
@@ -3608,7 +3609,7 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if (using_libctf)
+	if (use_libctf)
 		conf_load.format_path = "libctf";
 
 	cus = cus__new();
@@ -3643,7 +3644,7 @@ try_sole_arg_as_class_names:
 		    strstr(filename, "/vmlinux") == NULL) {
 			base_btf_file = vmlinux_path__btf_filename();
 
-			if (!using_libctf) {
+			if (!use_libctf) {
 				conf_load.base_btf = btf__parse(base_btf_file, NULL);
 				if (libbpf_get_error(conf_load.base_btf)) {
 					fprintf(stderr, "Failed to parse base BTF '%s': %ld\n",
