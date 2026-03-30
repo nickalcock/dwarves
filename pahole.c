@@ -34,7 +34,6 @@ static char *detached_btf_filename;
 struct cus *cus;
 static bool btf_encode;
 static bool ctf_encode;
-static bool using_libctf;
 static bool sort_output;
 static bool need_resort;
 static bool first_obj_only;
