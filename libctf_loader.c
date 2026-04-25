@@ -235,7 +235,7 @@ static int create_members(struct cu *cu, const struct btf_type *tp, struct type 
 	const char *name;
 	ctf_id_t membtype;
 
-	while ((offset = ctf_member_next(cu->ctf_fp, id, &i, &name, &membtype, &bit_width, 1)) != CTF_ERR) {
+	while ((offset = ctf_member_next(cu->ctf_fp, id, &i, &name, &membtype, &bit_width, 0)) != CTF_ERR) {
 		struct class_member *member = zalloc(sizeof(*member));
 
 		if (bit_width == -1)
