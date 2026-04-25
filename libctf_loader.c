@@ -101,7 +101,7 @@ static int create_new_function(struct cu *cu, const struct btf_type *tp, uint32_
 	func->btf = 1;
 	func->proto.tag.tag = DW_TAG_subprogram;
 	func->proto.tag.type = tp->type;
-	func->name = ctf_type_aname(cu->ctf_fp, id);
+	func->name = ctf_type_name_raw(cu->ctf_fp, id);
 	INIT_LIST_HEAD(&func->lexblock.tags);
 	cu__add_tag_with_id(cu, &func->proto.tag, id);
 
@@ -174,7 +174,7 @@ static struct variable *variable__new(const char *name, uint32_t linkage)
 static int create_new_int_type(struct cu *cu, const struct btf_type *tp, uint32_t id)
 {
 	uint32_t attrs = btf_int_encoding(tp);
-	const char *name = ctf_type_aname(cu->ctf_fp, id);
+	const char *name = ctf_type_name_raw(cu->ctf_fp, id);
 	struct base_type *base = base_type__new(name, attrs, 0, btf_int_bits(tp));
 
 	if (base == NULL)
@@ -188,7 +188,7 @@ static int create_new_int_type(struct cu *cu, const struct btf_type *tp, uint32_
 
 static int create_new_float_type(struct cu *cu, const struct btf_type *tp, uint32_t id)
 {
-	const char *name = ctf_type_aname(cu->ctf_fp, id);
+	const char *name = ctf_type_name_raw(cu->ctf_fp, id);
 	struct base_type *base = base_type__new(name, 0, BT_FP_SINGLE, tp->size * 8);
 
 	if (base == NULL)
@@ -261,8 +261,7 @@ static int create_members(struct cu *cu, const struct btf_type *tp, struct type 
 
 static int create_new_class(struct cu *cu, const struct btf_type *tp, uint32_t id)
 {
-	// Fixup name, as libctf will return "struct <name>".
-	struct class *class = class__new(ctf_type_aname(cu->ctf_fp, id) + 7, 
+	struct class *class = class__new(ctf_type_name_raw(cu->ctf_fp, id), 
 					tp->size, false);
 	int member_size = create_members(cu, tp, &class->type, id);
 
@@ -279,7 +278,7 @@ out_free:
 
 static int create_new_union(struct cu *cu, const struct btf_type *tp, uint32_t id)
 {
-	struct type *un = type__new(DW_TAG_union_type, ctf_type_aname(cu->ctf_fp, id), tp->size);
+	struct type *un = type__new(DW_TAG_union_type, ctf_type_name_raw(cu->ctf_fp, id), tp->size);
 	int member_size = create_members(cu, tp, un, id);
 
 	if (member_size < 0)
@@ -312,7 +311,7 @@ static int create_new_enumeration(struct cu *cu, const struct btf_type *tp, uint
 	ctf_next_t *it = NULL;
 	ctf_enum_value_t enum_value;
 	struct type *enumeration = type__new(DW_TAG_enumeration_type,
-					     ctf_type_aname(cu->ctf_fp, id),
+					     ctf_type_name_raw(cu->ctf_fp, id),
 					     tp->size ? tp->size * 8 : (sizeof(int) * 8));
 
 	if (enumeration == NULL)
@@ -363,7 +362,7 @@ static int create_new_enumeration64(struct cu *cu, const struct btf_type *tp, ui
 	ctf_next_t *it = NULL;
 	ctf_enum_value_t enum_value;
 	struct type *enumeration = type__new(DW_TAG_enumeration_type,
-					     ctf_type_aname(cu->ctf_fp, id),
+					     ctf_type_name_raw(cu->ctf_fp, id),
 					     tp->size ? tp->size * 8 : (sizeof(int) * 8));
 
 	if (enumeration == NULL)
@@ -409,7 +408,7 @@ static int create_new_subroutine_type(struct cu *cu, const struct btf_type *tp, 
 
 static int create_new_forward_decl(struct cu *cu, const struct btf_type *tp, uint32_t id)
 {
-	struct class *fwd = class__new(ctf_type_aname(cu->ctf_fp, id), 0, btf_kflag(tp));
+	struct class *fwd = class__new(ctf_type_name_raw(cu->ctf_fp, id), 0, btf_kflag(tp));
 
 	if (fwd == NULL)
 		return -ENOMEM;
@@ -420,7 +419,7 @@ static int create_new_forward_decl(struct cu *cu, const struct btf_type *tp, uin
 
 static int create_new_typedef(struct cu *cu, const struct btf_type *tp, uint32_t id)
 {
-	struct type *type = type__new(DW_TAG_typedef, ctf_type_aname(cu->ctf_fp, id), 0);
+	struct type *type = type__new(DW_TAG_typedef, ctf_type_name_raw(cu->ctf_fp, id), 0);
 
 	if (type == NULL)
 		return -ENOMEM;
@@ -434,7 +433,7 @@ static int create_new_typedef(struct cu *cu, const struct btf_type *tp, uint32_t
 static int create_new_variable(struct cu *cu, const struct btf_type *tp, uint32_t id)
 {
 	struct btf_var *bvar = btf_var(tp);
-	struct variable *var = variable__new(ctf_type_aname(cu->ctf_fp, id), bvar->linkage);
+	struct variable *var = variable__new(ctf_type_name_raw(cu->ctf_fp, id), bvar->linkage);
 
 	if (var == NULL)
 		return -ENOMEM;
@@ -514,7 +513,7 @@ static int process_decl_tag(struct cu *cu, const struct btf_type *tp, uint32_t i
 		return 0;
 	}
 
-	const char *attribute = ctf_type_aname(cu->ctf_fp, id);
+	const char *attribute = ctf_type_name_raw(cu->ctf_fp, id);
 	tmp = attributes__realloc(tag->attributes, attribute);
 	if (!tmp)
 		return -ENOMEM;
