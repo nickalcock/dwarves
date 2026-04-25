@@ -248,6 +248,25 @@ static int create_members(struct cu *cu, const struct btf_type *tp, struct type 
 		member->tag.type   = membtype;
 		member->name	   = name;
 		member->bit_offset = offset;
+		member->bitfield_offset = 0;
+
+                if (bit_width > 0) {
+			int align;
+			align = ctf_type_align(cu->ctf_fp, membtype);
+			if (align < 0) {
+				char *foo;
+
+                                fprintf(stderr, "libctf error emitting bitfield %s of %s: %s; skipped\n",
+					name, foo = ctf_type_aname(cu->ctf_fp, id),
+					ctf_errmsg(ctf_errno(cu->ctf_fp)));
+				free(foo);
+				return 0;
+			}
+			/* XXX technically perhaps right, but non-DWARFy: wrong on BE? */
+			if (align != 0)
+				member->bitfield_offset = offset % align;
+		}
+
 		member->byte_offset = offset / 8;
 		member->bitfield_size = bit_width;
 		/* sizes added here instead of in class__fixup_btf_bitfields.  */
