@@ -1603,6 +1603,7 @@ static size_t __class__fprintf(struct class *class, const struct cu *cu,
 	uint32_t cacheline = 0;
 	int size_diff = 0;
 	int first = 1;
+	size_t highest_offset = 0;
 	struct class_member *pos, *last = NULL;
 	struct tag *tag_pos;
 	const char *current_accessibility = NULL;
@@ -1783,6 +1784,9 @@ static size_t __class__fprintf(struct class *class, const struct cu *cu,
 					}
 				}
 			}
+
+			if (pos->byte_offset > highest_offset)
+				highest_offset = pos->byte_offset + pos->byte_size;
 		}
 
 		if (newline) {
@@ -2022,14 +2026,36 @@ next_member:
 				   m->byte_size);
 	}
 
-	size_diff = type->size * 8 - (sum_bytes * 8 + sum_bits + sum_holes * 8 + sum_bit_holes +
-				      class->padding * 8 + class->bit_padding);
-	if (size_diff && type->nr_members != 0)
-		printed += fprintf(fp, "\n%.*s/* BRAIN FART ALERT! %d bytes != "
-				   "%u (member bytes) + %u (member bits) "
-				   "+ %u (byte holes) + %u (bit holes), diff = %d bits */\n",
-				   cconf.indent, tabs,
-				   type->size, sum_bytes, sum_bits, sum_holes, sum_bit_holes, size_diff);
+	if (!conf->skip_validate_padding) {
+		size_diff = type->size * 8 - (sum_bytes * 8 + sum_bits + sum_holes * 8 + sum_bit_holes +
+					      class->padding * 8 + class->bit_padding);
+		if (size_diff && type->nr_members != 0)
+			printed += fprintf(fp, "\n%.*s/* BRAIN FART ALERT! %d bytes != "
+					   "%u (member bytes) + %u (member bits) "
+					   "+ %u (byte holes) + %u (bit holes), diff = %d bits */\n",
+					   cconf.indent, tabs,
+					   type->size, sum_bytes, sum_bits, sum_holes, sum_bit_holes, size_diff);
+	} else {
+		/*
+		 * For libctf, only check that the size is not too large,
+		 * and does not run off the end of the structure, and that
+		 * it's not smaller than the sum of all member sizes (thus
+		 * detecting many causes of accidental overlaps that should
+		 * be in unions as a side-effect).  There's no point
+		 * verifying padding and holes that BTF does not encode in
+		 * any case.
+		 */
+		if (highest_offset > type->size * 8)
+			printed += fprintf(fp, "\n%*.s/* BRAIN FART ALERT! "
+					   "highest offset + size = %zi, "
+					   "higher than type size %d\n", cconf.indent, tabs,
+					   highest_offset, type->size * 8);
+		if (type->size * 8 < sum_bytes * 8 + sum_bits)
+			printed += fprintf(fp, "\n%*.s/* BRAIN FART ALERT! "
+					   "%u (member bytes) + %u (member bits) = %u, "
+					   "higher than type size %d\n", cconf.indent, tabs,
+					   sum_bytes, sum_bits, sum_bytes * 8 + sum_bits, type->size * 8);
+	}
 out:
 	printed += fprintf(fp, "%.*s}", indent, tabs);
 

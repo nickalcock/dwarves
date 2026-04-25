@@ -3608,8 +3608,13 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if (use_libctf)
+	if (use_libctf) {
 		conf_load.format_path = "libctf";
+	}
+
+	if (strcmp(conf_load.format_path, "libctf") == 0) {
+		conf.skip_validate_padding = 1;
+	}
 
 	cus = cus__new();
 	if (cus == NULL) {
