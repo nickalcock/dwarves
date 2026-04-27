@@ -663,24 +663,31 @@ static int cus__load_btf_libctf(struct cus *cus, struct conf_load *conf, const c
 	ctf_dict_t *link = NULL, *fp, *against_dict = NULL;
 	ctf_archive_t *ctf, *against = NULL, *linked;
 	ctf_error_t err = -1;
+	int fd;
 	unsigned char *out;
 	ctf_sect_t s = {0};
 	int is_btf;
+	Elf *elf = NULL;
 
 	// Pass a zero for addr_size, we'll get it after we load via btf__pointer_size()
 	struct cu *cu = cu__new(filename, 0, NULL, 0, filename, false);
 	if (cu == NULL)
 		return -1;
 
-	// cu set up
+	elf_version(EV_CURRENT);
+	fd = open(filename, O_RDONLY);
+        elf = elf_begin(fd, ELF_C_READ, NULL);
+
+        // cu set up
 	cu->language = LANG_C;
 	cu->uses_global_strings = false;
 	cu->dfops = &libctf__ops;
+	cu->elf = elf;
 
 	libbpf_set_print(libbpf_log);
 
 	// libctf opening procedure
-	if ((ctf = ctf_open(filename, NULL, &err)) == NULL)
+	if ((ctf = ctf_fdopen(fd, filename, NULL, &err)) == NULL)
 		goto open_err;
 
 	// Kludgy as hell dedup-against-parent code.  Should use an arg, not
@@ -777,14 +784,22 @@ static int cus__load_btf_libctf(struct cus *cus, struct conf_load *conf, const c
 
 	// add newly created cu
 	cus__add(cus, cu);
+	close(fd);
+	elf_end(elf);
 	return err;
 
 out_free:
 	cu__delete(cu); // will call btf__free(cu->priv);
+	close(fd);
+	if(elf)
+		elf_end(elf);
 	return err;
 ctf_err:
 	fprintf(stderr, "%s: ctf error: %s\n", filename, ctf_errmsg(err));
 	libctf__errwarn(NULL);
+	close(fd);
+	if(elf)
+		elf_end(elf);
 	return -1;
 link_err:
 	fprintf(stderr, "%s: ctf error deduplicating: %s\n", filename, ctf_errmsg(ctf_errno(link)));
@@ -792,15 +807,24 @@ link_err:
 	ctf_dict_close(link);
 	ctf_arc_close(against);
 	ctf_arc_close(ctf);
+	close(fd);
+	if(elf)
+		elf_end(elf);
 	return -1;
 create_err:
 	fprintf(stderr, "%s: cannot create dict for linking purposes: %s\n",
 		filename, ctf_errmsg(err));
 	libctf__errwarn(NULL);
+	close(fd);
+	if(elf)
+		elf_end(elf);
 	return -1;
 open_err:
 	fprintf(stderr, "%s: cannot open: %s\n", filename, ctf_errmsg(err));
 	libctf__errwarn(NULL);
+	close(fd);
+	if(elf)
+		elf_end(elf);
 	return -1;
 }
 
