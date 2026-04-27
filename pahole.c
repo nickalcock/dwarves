@@ -3610,6 +3610,7 @@ int main(int argc, char *argv[])
 
 	if (use_libctf) {
 		conf_load.format_path = "libctf";
+		conf_load.btf_no_dedup = true;
 	}
 
 	if (strcmp(conf_load.format_path, "libctf") == 0) {

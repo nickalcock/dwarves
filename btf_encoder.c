@@ -2153,7 +2153,7 @@ int btf_encoder__encode(struct btf_encoder *encoder, struct conf_load *conf)
 	if (btf__type_cnt(encoder->btf) == 1)
 		return 0;
 
-	if (btf__dedup(encoder->btf, NULL)) {
+	if (!conf->btf_no_dedup && btf__dedup(encoder->btf, NULL)) {
 		fprintf(stderr, "%s: btf__dedup failed!\n", __func__);
 		return -1;
 	}
